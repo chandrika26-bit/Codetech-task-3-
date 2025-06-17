@@ -1,0 +1,101 @@
+module pipeline_processor #(parameter DATA_WIDTH = 8, ADDR_WIDTH = 4) (
+    input clk,
+    input reset
+);
+
+// Simple instruction encoding
+localparam ADD  = 2'b00;
+localparam SUB  = 2'b01;
+localparam LOAD = 2'b10;
+
+// Register File
+reg [DATA_WIDTH-1:0] regfile [0:7];
+
+// Simple Memory
+reg [DATA_WIDTH-1:0] memory [0:15];
+
+// Pipeline Registers
+reg [15:0] IF_ID, ID_EX, EX_WB;
+reg [DATA_WIDTH-1:0] WB_Data;
+reg [ADDR_WIDTH-1:0] PC;
+
+// IF Stage
+wire [15:0] instr;
+assign instr = memory[PC];
+
+// ID Stage
+wire [1:0] opcode;
+wire [2:0] rd, rs1, rs2;
+wire [ADDR_WIDTH-1:0] addr;
+assign opcode = IF_ID[15:14];
+assign rd     = IF_ID[13:11];
+assign rs1    = IF_ID[10:8];
+assign rs2    = IF_ID[7:5];
+assign addr   = IF_ID[7:0];
+
+// EX Stage
+reg [DATA_WIDTH-1:0] alu_result;
+always @(*) begin
+    case(ID_EX[15:14])
+        ADD:  alu_result = regfile[ID_EX[10:8]] + regfile[ID_EX[7:5]];
+        SUB:  alu_result = regfile[ID_EX[10:8]] - regfile[ID_EX[7:5]];
+        LOAD: alu_result = memory[ID_EX[7:0]];
+        default: alu_result = 0;
+    endcase
+end
+
+// WB Stage
+always @(posedge clk) begin
+    if (reset) begin
+        PC      <= 0;
+        IF_ID   <= 0;
+        ID_EX   <= 0;
+        EX_WB   <= 0;
+        WB_Data <= 0;
+    end else begin
+        // Writeback
+        if (EX_WB[15:14] != 2'bxx) begin
+            regfile[EX_WB[13:11]] <= WB_Data;
+        end
+
+        // Pipeline registers update
+        EX_WB   <= ID_EX;
+        WB_Data <= alu_result;
+        ID_EX   <= IF_ID;
+        IF_ID   <= instr;
+        PC      <= PC + 1;
+    end
+end
+
+endmodule
+module testbench;
+    reg clk = 0, reset = 1;
+    pipeline_processor uut(.clk(clk), .reset(reset));
+
+    initial begin
+        // Clock Generation
+        forever #5 clk = ~clk;
+    end
+
+    initial begin
+        // Initialize Program in Memory: 
+        // ADD r1, r2, r3 (r1 = r2 + r3)
+        // SUB r4, r1, r2 (r4 = r1 - r2)
+        // LOAD r6, 8     (r6 = Mem[8])
+        #10 reset = 0;
+        uut.memory[0] = 16'b00_001_010_011_0000; // ADD r1, r2, r3
+        uut.memory[1] = 16'b01_100_001_010_0000; // SUB r4, r1, r2
+        uut.memory[2] = 16'b10_110_00001000;     // LOAD r6, 8
+        // Preload register values
+        uut.regfile[2] = 8'd5;
+        uut.regfile[3] = 8'd7;
+        uut.memory[8] = 8'd100;
+        #80 $stop;
+    end
+
+    // Monitor pipeline
+    always @(posedge clk) begin
+        $display("PC=%d, IF_ID=%h, ID_EX=%h, EX_WB=%h, WB_Data=%d",
+            uut.PC, uut.IF_ID, uut.ID_EX, uut.EX_WB, uut.WB_Data);
+    end
+endmodule
